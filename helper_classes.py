@@ -1,5 +1,6 @@
 import numpy as np
 
+EPSILON = 1e-6
 # This function gets a vector and returns its normalized form.
 def normalize(vector):
     return vector / np.linalg.norm(vector)
@@ -9,7 +10,19 @@ def normalize(vector):
 # This function returns the vector that reflects from the surface
 def reflected(vector, normal):
     v = vector - 2 * np.dot(vector, normal) * normal
-    return v
+    return normalize(v)
+
+
+def refracted(vector, normal, n1, n2):
+    cos_theta1 = -np.dot(vector, normal)
+    sin_theta1 = np.sqrt(max(0.0, 1 - cos_theta1**2))
+    sin_theta2 = (n1 / n2) * sin_theta1
+    if sin_theta2 > 1.0:
+        return None
+
+    cos_theta2 = np.sqrt(max(0.0, 1 - sin_theta2 ** 2))
+    T = ((n1 / n2) * cos_theta1 - cos_theta2) * normal + (n1 / n2) * vector
+    return normalize(T)
 
 ## Lights
 
@@ -52,7 +65,6 @@ class PointLight(LightSource):
 
     # This function returns the distance from a point to the light source
     def get_distance_from_light(self, P):
-
         return np.linalg.norm(self.position - P)
 
     # This function returns the light intensity at a point
@@ -66,20 +78,29 @@ class PointLight(LightSource):
 class SpotLight(LightSource):
     def __init__(self, intensity, position, direction, kc, kl, kq):
         super().__init__(intensity)
+        self.position = np.array(position)
+        self.direction = np.array(direction)
+        self.kc = kc
+        self.kl = kl
+        self.kq = kq
         # TODO
 
     # This function returns the ray that goes from the light source to a point
     def get_light_ray(self, intersection):
-        #TODO
-        pass
+        return Ray(intersection, normalize(self.position - intersection))
 
     def get_distance_from_light(self, intersection):
-        #TODO
-        pass
+        return np.linalg.norm(self.position - intersection)
 
     def get_intensity(self, intersection):
-        #TODO
-        pass
+        v_d = normalize(self.direction)
+        v = normalize(intersection - self.position)
+        cos = np.dot(v, v_d)
+        if cos < 0:
+            return np.zeros(3)
+        distance = self.get_distance_from_light(intersection)
+        return self.intensity * (np.dot(v, v_d) / (self.kq * (distance ** 2) + self.kl * distance + self.kc))
+
 
 
 class Ray:
@@ -92,9 +113,9 @@ class Ray:
     def nearest_intersected_object(self, objects):
         nearest_object = None
         min_distance = np.inf
-        #TODO
+
         nearest_intersections = [
-            (hit, obj)
+            hit
             for obj in objects
             if (hit := obj.intersect(self)) is not None
         ]
@@ -105,7 +126,7 @@ class Ray:
 
         if nearest_intersection:
             nearest_object = nearest_intersection[1]
-            min_distance = nearest_intersection[0][0]
+            min_distance = nearest_intersection[0]
 
         return nearest_object, min_distance
 
@@ -119,6 +140,13 @@ class Object3D:
         self.reflection = reflection
         self.emission = emission
         self.refraction = refraction
+        self.ambient    = np.array(ambient,   dtype=float)
+        self.diffuse    = np.array(diffuse,   dtype=float)
+        self.specular   = np.array(specular,  dtype=float)
+        self.shininess  = float(shininess)
+        self.reflection = float(reflection)
+        self.emission   = np.array(emission,  dtype=float)
+        self.refraction = float(refraction)
 
 class Plane(Object3D):
     def __init__(self, normal, point):
@@ -127,11 +155,14 @@ class Plane(Object3D):
 
     def intersect(self, ray: Ray):
         v = self.point - ray.origin
-        t = np.dot(v, self.normal) / (np.dot(self.normal, ray.direction) + 1e-6)
+        t = np.dot(v, self.normal) / (np.dot(self.normal, ray.direction) + EPSILON)
         if t > 0:
             return t, self
         else:
             return None
+
+    def get_normal(self, P_hit):
+        return self.normal
 
 
 class Triangle(Object3D):
@@ -152,12 +183,27 @@ class Triangle(Object3D):
 
     # computes normal to the trainagle surface. Pay attention to its direction!
     def compute_normal(self):
-        # TODO
-        pass
+        return normalize(np.cross(self.b - self.a, self.c - self.a))
 
     def intersect(self, ray: Ray):
-        # TODO
-        pass
+        origin, dir = ray.origin, ray.direction
+        e1 = self.b - self.a
+        e2 = self.c - self.a
+        A = np.column_stack((-dir, e1, e2))
+        S = origin - self.a
+        try:
+            t, u, v = np.linalg.solve(A, S)
+        except np.linalg.LinAlgError:
+            return None
+
+        if t > EPSILON and u >= 0 and v >= 0 and u + v <= 1:
+            return t, self  # distance along the ray
+
+        return None
+
+    def get_normal(self, P_hit):
+        return self.normal
+
 
 class Diamond(Object3D):
 #     """
@@ -198,16 +244,20 @@ class Diamond(Object3D):
                  [4,1,0],
                  [4,2,1],
                  [2,4,0]]
-        # TODO
+        l = [Triangle(self.v_list[t[0]], self.v_list[t[1]], self.v_list[t[2]]) for t in t_idx]
         return l
 
     def apply_materials_to_triangles(self):
-        # TODO
-        pass
+        for triangle in self.triangle_list:
+            triangle.set_material(ambient=self.ambient, diffuse=self.diffuse, specular=self.specular, shininess=self.shininess, reflection=self.reflection)
 
     def intersect(self, ray: Ray):
-        # TODO
-        pass
+        nearest_intersection = ray.nearest_intersected_object(self.triangle_list)
+        if nearest_intersection:
+            return nearest_intersection[1], nearest_intersection[0]
+
+        return None
+
 
 class Sphere(Object3D):
     def __init__(self, center, radius: float):
@@ -215,6 +265,28 @@ class Sphere(Object3D):
         self.radius = radius
 
     def intersect(self, ray: Ray):
-        #TODO
-        pass
+        origin, direction = ray.origin, ray.direction
+        L = origin - self.center
+        a = 1
+        b = 2.0 * np.dot(direction, L)
+        c = np.dot(L, L) - self.radius ** 2
+        delta = b*b - 4*c
+        if delta < 0:
+            return None
+        sqrt_delta = np.sqrt(delta)
+        t1 = (-b - sqrt_delta) / 2.0
+        t2 = (-b + sqrt_delta) / 2.0
+        t_hit = None
 
+        if t1 > EPSILON:
+            t_hit = t1
+        elif t2 > EPSILON:
+            t_hit = t2
+
+        if t_hit is None:
+            return None    # intersections are behind the origin
+
+        return t_hit, self
+
+    def get_normal(self, P_hit):
+        return normalize(P_hit - self.center)
