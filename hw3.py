@@ -76,53 +76,32 @@ def get_color(ambient, lights, objects, max_level, ray, intersection, level):
                                                     max_level, refl_ray, refl_inter, level)
 
     if hit_obj.refraction > 0:  # 1. material lets light through
-        # 2. decide which way the ray is travelling
-        outside_ior = 1.0  # assume air outside
-        inside_ior = getattr(hit_obj, "refraction", 1.0)  # glass, water, etc.
+        inside_origin = P_hit - normal * EPSILON
+        trans_dir = ray.direction
 
-        front_face = np.dot(ray.direction, normal) < 0  # entering the object?
-        n_from, n_to = (outside_ior, inside_ior) if front_face else (inside_ior, outside_ior)
-        N_use = normal if front_face else -normal  # flip normal when exiting
-
-        # 3. Snell-law direction
-        trans_dir = refracted(ray.direction, N_use, n_from, n_to)
-
-        # 4. if no TIR, trace the transmitted ray recursively
-        if trans_dir is not None:
-            trans_ray = Ray(P_hit + EPSILON * trans_dir, trans_dir)
-            trans_hit = trans_ray.nearest_intersected_object(objects)
-            if trans_hit:
-                color += hit_obj.refraction * get_color(
-                    ambient, lights, objects, max_level,
-                    trans_ray, trans_hit, level,
-                )
+        trans_ray = Ray(inside_origin, trans_dir)
+        trans_hit = trans_ray.nearest_intersected_object(objects)
+        if trans_hit:
+            color += hit_obj.refraction * get_color(
+                ambient, lights, objects, max_level,
+                trans_ray, trans_hit, level,
+            )
 
     return color
-
-
-def refracted(I, N, ior_from, ior_to):
-    """
-    Compute refracted direction (returns None if total-internal reflection).
-    I  : incident *normalized* direction (pointing *into* the surface)
-    N  : outward *normalized* surface normal
-    ior_from: index of refraction of incident medium
-    ior_to  : index of refraction of transmitted medium
-    """
-    cosi = -np.dot(I, N)
-    eta = ior_from / ior_to
-    k = 1.0 - eta ** 2 * (1.0 - cosi ** 2)
-    if k < 0.0:  # total internal reflection
-        return None
-    return eta * I + (eta * cosi - np.sqrt(k)) * N
 
 
 def in_shadow(P, Ldir, objects, light, max_dist=np.inf):
     shadow_ray = Ray(P + EPSILON * Ldir, Ldir)
     hit = shadow_ray.nearest_intersected_object(objects)
+
     if not hit:
         return False
 
     obj, t = hit
+
+    if obj.refraction > 0.0:
+        return False
+
     if hasattr(light, "position"):  # point light
         d_light = np.linalg.norm(light.position - P)
         return t < d_light
@@ -133,73 +112,57 @@ def in_shadow(P, Ldir, objects, light, max_dist=np.inf):
 # Write your own objects and lights
 # TODO
 def your_own_scene():
-    # === geometry ===
 
-    # floor + back wall (as before)
-    floor = Plane([0, 1, 0], [0, -0.5, 0])
-    floor.set_material(
-        ambient   = [0.1, 0.1, 0.1],
-        diffuse   = [0.8, 0.8, 0.8],
-        specular  = [0.5, 0.5, 0.5],
-        shininess = 300,
-        reflection= 0.25,
-        refraction= 0.0
-    )
+    # ─── helper to build materials ──────────────────────────────
+    def mat(ambient, diffuse, spec=(0.3,0.3,0.3),
+            sh=150, refl=0.05, refr=0.0):
+        return dict(ambient=ambient, diffuse=diffuse,
+                    specular=spec, shininess=sh,
+                    reflection=refl, refraction=refr)
 
-    background = Plane([0, 0, 1], [0, 0, -4])
-    background.set_material(
-        ambient   = [0.2, 0.2, 0.2],
-        diffuse   = [0.25, 0.3, 0.5],
-        specular  = [0.1, 0.1, 0.1],
-        shininess = 20,
-        reflection= 0.0,
-        refraction= 0.0
-    )
+    # ─── materials ──────────────────────────────────────────────
+    floor_mat   = mat((0.05,0.08,0.05), (0.0,0.40,0.0), spec=(0.15,0.15,0.15), sh=60)
+    sky_mat     = mat((0.05,0.05,0.08), (0.6,0.8,1.0), spec=(0,0,0), sh=1)
+    diamond_mat = mat((0,0,0), [0.05,0.35,0.30], spec=(0.9,0.9,0.9), sh=300, refl=0.07, refr=0.90)
 
-    # six glass‐box faces
-    size = 1.0  # half‐extents
-    glass_kwargs = {
-        "ambient":   [0.0, 0.0, 0.0],
-        "diffuse":   [0.0, 0.0, 0.0],
-        "specular":  [0.9, 0.9, 1.0],
-        "shininess": 200,
-        "reflection":0.1,
-        "refraction":0.9
-    }
+    # ─── geometry: floor & sky ──────────────────────────────────
+    floor = Plane([0,1,0], [0,-1.0,0]);   floor.set_material(**floor_mat)
+    sky   = Plane([0,0,1], [0,0,-6.0]);   sky.set_material(**sky_mat)
 
-    # +X face
-    right = Plane([-1, 0, 0], [ size, 0, 0])
-    right.set_material(**glass_kwargs)
-    # -X face
-    left  = Plane([ 1, 0, 0], [-size, 0, 0])
-    left.set_material(**glass_kwargs)
-    # +Y face (ceiling)
-    top   = Plane([0, -1, 0], [0,  size, 0])
-    top.set_material(**glass_kwargs)
-    # -Y face (floor already exists, but we can add a slightly lower glass cap)
-    bottom= Plane([0,  1, 0], [0, -size, 0])
-    bottom.set_material(**glass_kwargs)
-    # +Z face
+    # ─── geometry: raw diamond vertices ────────────────────────
+    base_v = np.array([
+        [-0.8, -0.25, -3.0],   # A
+        [-0.06, 0.15, -2.3],   # B
+        [ 0.8,  0.05, -3.0],   # C
+        [-0.16, 1.05, -3.0],   # D (top)
+        [ 0.34,-0.95, -3.0],   # E (bottom)
+    ])
+    # ─── rotate 45° about Y so that edge (A–C) faces the camera ─
+    theta = np.deg2rad(45)
+    rotY = np.array([
+        [ np.cos(theta), 0, np.sin(theta)],
+        [             0, 1,             0],
+        [-np.sin(theta), 0, np.cos(theta)],
+    ])
+    center = np.mean(base_v, axis=0)
+    base_v = ((base_v - center) @ rotY.T) + center
 
-    objects = [
-        floor, background,
-        right, left, top, bottom, 
-    ]
+    # ─── build the diamond and propagate its material ──────────
+    cloak = Diamond(base_v)
+    cloak.set_material(**diamond_mat)
+    cloak.apply_materials_to_triangles()
 
-    # === two lights ===
-    key = PointLight(
-        intensity = np.array([1, 1, 1]),
-        position  = np.array([2, 3, 2]),
-        kc=0.1, kl=0.05, kq=0.02
-    )
-    fill = DirectionalLight(
-        intensity = np.array([0.4, 0.45, 0.5]),
-        direction = np.array([-1, -1, -0.5])
-    )
-    lights = [key, fill]
+    objects = [floor, sky, cloak]
 
-    # === camera & render ===
-    camera  = np.array([0.0, 0.2, 1.5])
-    ambient = np.array([0.05, 0.05, 0.05])
+    # ─── a brighter “sun” so you can actually see those two front faces ──
+    sun = DirectionalLight(intensity=np.array([2.5,2.5,2.3]),
+                           direction=np.array([-1,-1,-0.4]))
+    fill = DirectionalLight(intensity=np.array([0.6,0.7,0.8]),
+                            direction=np.array([ 1,-1,-0.2]))
+    lights = [sun, fill]
+
+    # ─── camera & ambient ───────────────────────────────────────
+    camera  = np.array([0.0, 0.0, 1.5])
 
     return camera, lights, objects
+
