@@ -13,17 +13,6 @@ def reflected(vector, normal):
     return normalize(v)
 
 
-# def refracted(vector, normal, n1, n2):
-#     cos_theta1 = -np.dot(vector, normal)
-#     sin_theta1 = np.sqrt(max(0.0, 1 - cos_theta1**2))
-#     sin_theta2 = (n1 / n2) * sin_theta1
-#     if sin_theta2 > 1.0:
-#         return None
-#
-#     cos_theta2 = np.sqrt(max(0.0, 1 - sin_theta2 ** 2))
-#     T = ((n1 / n2) * cos_theta1 - cos_theta2) * normal + (n1 / n2) * vector
-#     return normalize(T)
-
 ## Lights
 
 

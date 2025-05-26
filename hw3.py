@@ -115,7 +115,7 @@ def your_own_scene():
 
     # ─── helper to build materials ──────────────────────────────
     def mat(ambient, diffuse, spec=(0.3,0.3,0.3),
-            sh=150, refl=0.05, refr=0.0):
+            sh=150, refl=0.15, refr=0.0):
         return dict(ambient=ambient, diffuse=diffuse,
                     specular=spec, shininess=sh,
                     reflection=refl, refraction=refr)
@@ -123,46 +123,50 @@ def your_own_scene():
     # ─── materials ──────────────────────────────────────────────
     floor_mat   = mat((0.05,0.08,0.05), (0.0,0.40,0.0), spec=(0.15,0.15,0.15), sh=60)
     sky_mat     = mat((0.05,0.05,0.08), (0.6,0.8,1.0), spec=(0,0,0), sh=1)
-    diamond_mat = mat((0,0,0), [0.05,0.35,0.30], spec=(0.9,0.9,0.9), sh=300, refl=0.07, refr=0.90)
 
     # ─── geometry: floor & sky ──────────────────────────────────
-    floor = Plane([0,1,0], [0,-1.0,0]);   floor.set_material(**floor_mat)
+    floor = Plane([0,1,0], [0,-0.8,0]);   floor.set_material(**floor_mat)
     sky   = Plane([0,0,1], [0,0,-6.0]);   sky.set_material(**sky_mat)
+    # ─── pyramid vertices ────────────────────────────────────────
+    P   = np.array([ 0.0,  2.0, -4.0])  # apex
+    FTL = np.array([-2.0,  0.0, -2.0])  # front–left
+    FTR = np.array([ 2.0,  0.0, -2.0])  # front–right
+    BTR = np.array([ 2.0,  0.0, -6.0])  # back–right
+    BTL = np.array([-2.0,  0.0, -6.0])  # back–left
 
-    # ─── geometry: raw diamond vertices ────────────────────────
-    base_v = np.array([
-        [-0.8, -0.25, -3.0],   # A
-        [-0.06, 0.15, -2.3],   # B
-        [ 0.8,  0.05, -3.0],   # C
-        [-0.16, 1.05, -3.0],   # D (top)
-        [ 0.34,-0.95, -3.0],   # E (bottom)
-    ])
-    # ─── rotate 45° about Y so that edge (A–C) faces the camera ─
-    theta = np.deg2rad(45)
-    rotY = np.array([
-        [ np.cos(theta), 0, np.sin(theta)],
-        [             0, 1,             0],
-        [-np.sin(theta), 0, np.cos(theta)],
-    ])
-    center = np.mean(base_v, axis=0)
-    base_v = ((base_v - center) @ rotY.T) + center
+    # ─── four triangular faces ───────────────────────────────────
+    faces = [
+        Triangle(P, FTL, FTR),  # front face
+        Triangle(P, FTR, BTR),  # right face
+        Triangle(P, BTR, BTL),  # back face
+        Triangle(P, BTL, FTL),  # left face
+    ]
+    for tri in faces:
+        tri.set_material(**mat((0.03, 0.04, 0.02), (0.0, 0.40, 0.0), refr=0.2))
 
-    # ─── build the diamond and propagate its material ──────────
-    cloak = Diamond(base_v)
-    cloak.set_material(**diamond_mat)
-    cloak.apply_materials_to_triangles()
+    faces[0].set_material(**mat((0.01, 0.01, 0.01), (0.3, 0.20, 0.0), refr=0.4))
+    faces[1].set_material(**mat((0.04, 0.02, 0.03), (0.2, 0.40, 0.0), refr=0.2))
+    faces[1].set_material(**mat((0.01, 0.02, 0.04), (0.5, 0.20, 0.1), refr=0.2))
 
-    objects = [floor, sky, cloak]
+    inner = Sphere([0.0, 0.8, -4.0], 0.6)
+    inner.set_material(
+        ambient   = [0.0, 0.0, 0.0],
+        diffuse   = [0.5, 0.1, 0.05],   # bright red
+        specular  = [0.2, 0.2, 0.2],
+        shininess = 100,
+        reflection= 0.3,
+        refraction= 0.0
+    )
+
+    objects = [floor, sky, inner] + faces
 
     # ─── a brighter “sun” so you can actually see those two front faces ──
-    sun = DirectionalLight(intensity=np.array([2.5,2.5,2.3]),
-                           direction=np.array([-1,-1,-0.4]))
-    fill = DirectionalLight(intensity=np.array([0.6,0.7,0.8]),
-                            direction=np.array([ 1,-1,-0.2]))
-    lights = [sun, fill]
+    sun = DirectionalLight(intensity=np.array([0.5,2.5,2.3]),
+                           direction=np.array([-0.5,-1,-0.5]))
+    lights = [sun]
 
     # ─── camera & ambient ───────────────────────────────────────
-    camera  = np.array([0.0, 0.0, 1.5])
+    camera  = np.array([0.0, 0.5, 1.5])
 
     return camera, lights, objects
 
